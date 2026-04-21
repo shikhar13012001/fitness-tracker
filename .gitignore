@@ -34,3 +34,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# next-pwa generated service worker (build artifact, regenerated on each deploy)
+/public/sw.js
+/public/workbox-*.js
+/public/worker-*.js
+/public/fallback-*.js
+
+# AI tool skill directories
+.agents/
+.claude/
+.cursor/

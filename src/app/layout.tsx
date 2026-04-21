@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
+import { PWAProvider } from "@/context/PWAContext";
 
 const geist = localFont({
   src: "./fonts/GeistVF.woff",
@@ -12,6 +13,14 @@ export const metadata: Metadata = {
   title: "FitTrack",
   description: "Your personal fitness trainer",
   manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "FitTrack",
+  },
+  icons: {
+    apple: "/icons/icon-192.svg",
+  },
 };
 
 export const viewport: Viewport = {
@@ -28,7 +37,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} dark`}>
       <body className="antialiased bg-background text-foreground">
-        {children}
+        <PWAProvider>{children}</PWAProvider>
       </body>
     </html>
   );
