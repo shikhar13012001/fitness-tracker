@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Scale, ChevronRight, Settings, BookOpen, Ruler } from "lucide-react";
+import { Scale, ChevronRight, Settings, BookOpen, Ruler, Calculator } from "lucide-react";
 
 interface MenuRow {
   href: string;
@@ -31,6 +31,14 @@ const sections: { title: string; rows: MenuRow[] }[] = [
         sub: "Chest, waist, arms, thighs",
         iconBg: "bg-purple-500/10",
         iconColor: "text-purple-400",
+      },
+      {
+        href: "/more/plates",
+        icon: Calculator,
+        label: "Plate Calculator",
+        sub: "Barbell loading made easy",
+        iconBg: "bg-orange-500/10",
+        iconColor: "text-orange-400",
       },
     ],
   },

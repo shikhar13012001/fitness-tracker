@@ -17,6 +17,7 @@ import {
 import { db } from "@/lib/db";
 import { todayString } from "@/lib/dateUtils";
 import { cn } from "@/lib/utils";
+import { kgToDisplay, displayToKg, isValidBodyweight, type Unit } from "@/lib/units";
 
 const STARTING_WEIGHT = 65;
 const TARGET_WEEKLY_MIN = 0.25;
@@ -49,7 +50,7 @@ interface ChartPoint {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function CustomTooltip({ active, payload, label }: any) {
+function CustomTooltip({ active, payload, label, unit }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-xl bg-card border border-border px-3 py-2 text-xs shadow-lg">
@@ -57,7 +58,7 @@ function CustomTooltip({ active, payload, label }: any) {
       {payload.map((p: { name: string; value: number | null; color: string }) =>
         p.value != null ? (
           <p key={p.name} style={{ color: p.color }}>
-            {p.name}: {p.value.toFixed(1)} kg
+            {p.name}: {p.value.toFixed(1)} {unit ?? "kg"}
           </p>
         ) : null
       )}
@@ -68,26 +69,28 @@ function CustomTooltip({ active, payload, label }: any) {
 function BodyweightTrendChart({
   entries,
   startDate,
+  unit,
 }: {
   entries: { date: string; weight: number }[];
   startDate: string;
+  unit: Unit;
 }) {
   const data = useMemo((): ChartPoint[] => {
     if (entries.length === 0) return [];
     const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date));
     return sorted.map((e) => {
       const weeks = weeksSince(startDate, e.date);
-      const target = STARTING_WEIGHT + weeks * TARGET_WEEKLY_IDEAL;
+      const targetKg = STARTING_WEIGHT + weeks * TARGET_WEEKLY_IDEAL;
       return {
         label: parseLocalDate(e.date).toLocaleDateString("en-US", {
           month: "short",
           day: "numeric",
         }),
-        actual: e.weight,
-        target: Math.round(target * 10) / 10,
+        actual: Math.round(kgToDisplay(e.weight, unit) * 10) / 10,
+        target: Math.round(kgToDisplay(targetKg, unit) * 10) / 10,
       };
     });
-  }, [entries, startDate]);
+  }, [entries, startDate, unit]);
 
   if (data.length < 2) return null;
 
@@ -111,10 +114,10 @@ function BodyweightTrendChart({
           tick={{ fill: "hsl(240 5% 64.9%)", fontSize: 10 }}
           tickLine={false}
           axisLine={false}
-          unit=" kg"
+          unit={" " + unit}
           width={52}
         />
-        <Tooltip content={<CustomTooltip />} cursor={{ stroke: "hsl(240 5% 64.9%)", strokeWidth: 1 }} />
+        <Tooltip content={<CustomTooltip unit={unit} />} cursor={{ stroke: "hsl(240 5% 64.9%)", strokeWidth: 1 }} />
         <Legend
           wrapperStyle={{ fontSize: 11, color: "hsl(240 5% 64.9%)", paddingTop: 8 }}
         />
@@ -150,6 +153,9 @@ export function BodyweightScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  const profile = useLiveQuery(() => db.userProfile.get(1));
+  const unit: Unit = (profile?.units ?? "kg") as Unit;
+
   const entries = useLiveQuery(
     () => db.bodyweightEntries.orderBy("date").reverse().limit(10).toArray(),
     []
@@ -180,11 +186,12 @@ export function BodyweightScreen() {
   );
 
   async function handleLog() {
-    const kg = parseFloat(inputVal);
-    if (isNaN(kg) || kg < 20 || kg > 300) {
-      setError("Enter a valid weight between 20–300 kg");
+    const val = parseFloat(inputVal);
+    if (isNaN(val) || !isValidBodyweight(val, unit)) {
+      setError(`Enter a valid weight (${unit === "lbs" ? "44–660" : "20–300"} ${unit})`);
       return;
     }
+    const kg = displayToKg(val, unit);
     setError("");
     setSaving(true);
     try {
@@ -198,13 +205,20 @@ export function BodyweightScreen() {
         });
       }
       setInputVal("");
+    } catch (e) {
+      setError("Failed to save: " + String(e));
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete(id: string) {
-    await db.bodyweightEntries.delete(id);
+    if (!window.confirm("Delete this entry?")) return;
+    try {
+      await db.bodyweightEntries.delete(id);
+    } catch (e) {
+      setError("Failed to delete: " + String(e));
+    }
   }
 
   const latestWeight = stats?.latest.weight ?? STARTING_WEIGHT;
@@ -233,11 +247,11 @@ export function BodyweightScreen() {
                 {todayEntry ? "Today" : "Last logged"}
               </p>
               <p className="text-4xl font-bold text-foreground tabular-nums">
-                {latestWeight.toFixed(1)}
-                <span className="text-lg font-normal text-muted-foreground ml-1">kg</span>
+                {kgToDisplay(latestWeight, unit).toFixed(1)}
+                <span className="text-lg font-normal text-muted-foreground ml-1">{unit}</span>
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Started at {STARTING_WEIGHT} kg · Target +{TARGET_WEEKLY_MIN}–{TARGET_WEEKLY_MAX} kg/wk
+                Started at {kgToDisplay(STARTING_WEIGHT, unit).toFixed(1)} {unit} · Target +{TARGET_WEEKLY_MIN}\u2013{TARGET_WEEKLY_MAX} {unit}/wk
               </p>
             </div>
             <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
@@ -254,7 +268,7 @@ export function BodyweightScreen() {
                   "text-2xl font-bold tabular-nums",
                   stats.totalGain >= 0 ? "text-green-400" : "text-red-400"
                 )}>
-                  {stats.totalGain >= 0 ? "+" : ""}{stats.totalGain.toFixed(1)} kg
+                  {stats.totalGain >= 0 ? "+" : ""}{kgToDisplay(stats.totalGain, unit).toFixed(1)} {unit}
                 </p>
               </div>
               <div className="flex-1 rounded-2xl bg-card border border-border p-4">
@@ -266,14 +280,14 @@ export function BodyweightScreen() {
                   "text-2xl font-bold tabular-nums",
                   stats.onTrack ? "text-green-400" : "text-yellow-400"
                 )}>
-                  {stats.weeklyRate >= 0 ? "+" : ""}{stats.weeklyRate.toFixed(2)}
-                  <span className="text-sm font-normal text-muted-foreground ml-1">kg</span>
+                  {stats.weeklyRate >= 0 ? "+" : ""}{kgToDisplay(stats.weeklyRate, unit).toFixed(2)}
+                  <span className="text-sm font-normal text-muted-foreground ml-1">{unit}</span>
                 </p>
                 <p className={cn(
                   "text-[11px] mt-0.5 font-medium",
                   stats.onTrack ? "text-green-400" : "text-yellow-400"
                 )}>
-                  {stats.onTrack ? "On track ✓" : `Target: +${TARGET_WEEKLY_MIN}–${TARGET_WEEKLY_MAX}`}
+                  {stats.onTrack ? "On track \u2713" : `Target: +${kgToDisplay(TARGET_WEEKLY_MIN, unit).toFixed(2)}\u2013${kgToDisplay(TARGET_WEEKLY_MAX, unit).toFixed(2)}`}
                 </p>
               </div>
             </div>
@@ -292,6 +306,7 @@ export function BodyweightScreen() {
                 <BodyweightTrendChart
                   entries={allEntries}
                   startDate={allEntries[0]?.date ?? todayString()}
+                  unit={unit}
                 />
               </div>
             </div>
@@ -310,11 +325,14 @@ export function BodyweightScreen() {
                   step="0.1"
                   value={inputVal}
                   onChange={(e) => { setInputVal(e.target.value); setError(""); }}
-                  placeholder={todayEntry ? String(todayEntry.weight) : `e.g. ${latestWeight.toFixed(1)}`}
+                  placeholder={todayEntry
+                    ? String(kgToDisplay(todayEntry.weight, unit).toFixed(1))
+                    : `e.g. ${kgToDisplay(latestWeight, unit).toFixed(1)}`
+                  }
                   className="w-full rounded-xl border border-input bg-background px-4 py-3 pr-10 text-sm font-semibold tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
                 />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">
-                  kg
+                  {unit}
                 </span>
               </div>
               <button
@@ -355,15 +373,15 @@ export function BodyweightScreen() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-semibold text-foreground tabular-nums">
-                            {entry.weight.toFixed(1)} kg
+                            {kgToDisplay(entry.weight, unit).toFixed(1)} {unit}
                           </span>
                           {delta !== null && (
                             <span className={cn(
                               "text-xs font-medium tabular-nums",
                               delta > 0 ? "text-green-400" : delta < 0 ? "text-red-400" : "text-muted-foreground"
                             )}>
-                              {delta > 0 ? "▲" : delta < 0 ? "▼" : "—"}
-                              {delta !== 0 ? ` ${Math.abs(delta).toFixed(1)}` : ""}
+                              {delta > 0 ? "\u25b2" : delta < 0 ? "\u25bc" : "\u2014"}
+                              {delta !== 0 ? ` ${kgToDisplay(Math.abs(delta), unit).toFixed(1)}` : ""}
                             </span>
                           )}
                           {isToday && (

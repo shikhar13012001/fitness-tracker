@@ -137,6 +137,7 @@ export interface UserProfile {
   startingWeightKg: number;
   currentWeightKg: number;
   units: "kg" | "lbs";
+  theme?: "dark" | "light" | "system"; // UI theme; default "dark"
   proteinTargetG: number;
   activePlanId: string;
   notificationPrefs?: NotificationPrefs;

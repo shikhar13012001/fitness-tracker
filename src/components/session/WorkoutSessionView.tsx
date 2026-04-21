@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { db } from "@/lib/db";
 import type { LoggedSet, PlannedExercise } from "@/lib/db";
+import { kgToDisplay, displayToKg, type Unit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import { useRestTimer } from "@/context/RestTimerContext";
 import {
@@ -173,10 +174,12 @@ function SetRow({
 
 function ProgressionSuggestionBar({
   planned,
+  unit,
   onAccept,
   onDismiss,
 }: {
   planned: PlannedExercise;
+  unit: Unit;
   onAccept: () => void;
   onDismiss: () => void;
 }) {
@@ -190,12 +193,15 @@ function ProgressionSuggestionBar({
     planned.suggestedNextReps !== null &&
     planned.suggestedNextReps !== undefined;
 
+  const dw = (kg: number | null | undefined) =>
+    kg != null ? kgToDisplay(kg, unit).toFixed(1) : "?";
+
   const label = isDeload
-    ? `Deload → ${planned.suggestedNextWeight} kg (was ${planned.targetWeight} kg)`
+    ? `Deload → ${dw(planned.suggestedNextWeight)} ${unit} (was ${dw(planned.targetWeight)} ${unit})`
     : hasRepSuggestion
     ? `Suggested: ${planned.suggestedNextReps} reps (was ${planned.targetRepMin})`
     : hasWeightSuggestion
-    ? `Suggested: ${planned.suggestedNextWeight} kg (was ${planned.targetWeight} kg)`
+    ? `Suggested: ${dw(planned.suggestedNextWeight)} ${unit} (was ${dw(planned.targetWeight)} ${unit})`
     : null;
 
   if (!label) return null;
@@ -258,9 +264,11 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 function SummaryScreen({
   summary,
+  unit,
   onDone,
 }: {
   summary: { duration: number; totalVolume: number; exercisesDone: number; prCount: number };
+  unit: Unit;
   onDone: () => void;
 }) {
   return (
@@ -288,7 +296,7 @@ function SummaryScreen({
         <StatCard label="Time" value={formatTime(summary.duration)} />
         <StatCard
           label="Volume"
-          value={`${Math.round(summary.totalVolume).toLocaleString()} kg`}
+          value={`${Math.round(kgToDisplay(summary.totalVolume, unit)).toLocaleString()} ${unit}`}
         />
         <StatCard label="Exercises" value={String(summary.exercisesDone)} />
       </div>
@@ -319,6 +327,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     [sessionId]
   );
   const profile = useLiveQuery(() => db.userProfile.get(1));
+  const unit: Unit = (profile?.units ?? "kg") as Unit;
   const activePlan = useLiveQuery(
     () =>
       profile?.activePlanId
@@ -408,7 +417,8 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
       for (const { logged, planned } of orderedPairs) {
         if (!next[logged.id]) {
           const count = planned?.targetSets ?? 3;
-          const defaultWeight = String(planned?.targetWeight ?? 0);
+          const rawKg = planned?.targetWeight ?? 0;
+          const defaultWeight = String(rawKg > 0 ? kgToDisplay(rawKg, unit).toFixed(1) : 0);
           const defaultReps = String(planned?.targetRepMin ?? 8);
           next[logged.id] = Array.from({ length: count }, () => ({
             weight: defaultWeight,
@@ -419,7 +429,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
       }
       return next;
     });
-  }, [orderedPairs]);
+  }, [orderedPairs, unit]);
 
   // ── All-done check ──────────────────────────────────────────────────────────
   const allDone = useMemo(() => {
@@ -480,7 +490,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
       restTimer.start(restSeconds);
 
       const set = sets[setIdx];
-      const weight = parseFloat(set.weight) || 0;
+      const weight = displayToKg(parseFloat(set.weight) || 0, unit);
       const reps = parseInt(set.reps) || 0;
 
       if (prLogs !== undefined && weight > 0 && reps > 0) {
@@ -520,12 +530,14 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     setSetsMap((prev) => {
       const sets = prev[leId] ?? [];
       const last = sets[sets.length - 1];
+      const rawKg = planned?.targetWeight ?? 0;
+      const fallback = String(rawKg > 0 ? kgToDisplay(rawKg, unit).toFixed(1) : 0);
       return {
         ...prev,
         [leId]: [
           ...sets,
           {
-            weight: last?.weight ?? String(planned?.targetWeight ?? 0),
+            weight: last?.weight ?? fallback,
             reps: last?.reps ?? String(planned?.targetRepMin ?? 8),
             done: false,
           },
@@ -585,7 +597,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
       const loggedSets: LoggedSet[] = drafts
         .filter((s) => s.done)
         .map((s) => ({
-          weight: parseFloat(s.weight) || 0,
+          weight: displayToKg(parseFloat(s.weight) || 0, unit),
           reps: parseInt(s.reps) || 0,
           rpe: null,
           timestamp: Date.now(),
@@ -653,6 +665,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     return (
       <SummaryScreen
         summary={summary}
+        unit={unit}
         onDone={() => router.replace("/today")}
       />
     );
@@ -762,7 +775,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
                   </span>
                   {current.planned.targetWeight !== null && (
                     <span className="text-xs bg-muted text-muted-foreground rounded-full px-2.5 py-0.5">
-                      {current.planned.targetWeight} kg
+                      {kgToDisplay(current.planned.targetWeight, unit).toFixed(1)} {unit}
                     </span>
                   )}
                   <span
@@ -781,6 +794,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
                 {current.planned.suggestionType && (
                   <ProgressionSuggestionBar
                     planned={current.planned}
+                    unit={unit}
                     onAccept={() =>
                       handleAcceptSuggestion(current.logged.exerciseId)
                     }
@@ -796,7 +810,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
           {/* Column headers */}
           <div className="grid grid-cols-[1.5rem_1fr_1fr_2.5rem_1.75rem] gap-2 px-5 pb-1.5 shrink-0">
             <span className="text-[11px] text-muted-foreground text-center">#</span>
-            <span className="text-[11px] text-muted-foreground text-center">kg</span>
+            <span className="text-[11px] text-muted-foreground text-center">{unit}</span>
             <span className="text-[11px] text-muted-foreground text-center">reps</span>
             <span />
             <span />

@@ -4,6 +4,7 @@ import { FloatingRestTimer } from "@/components/session/FloatingRestTimer";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 import { OfflineIndicator } from "@/components/pwa/OfflineIndicator";
 import { NotificationScheduler } from "@/components/pwa/NotificationScheduler";
+import { ThemeApplier } from "@/components/pwa/ThemeApplier";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -17,6 +18,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <FloatingRestTimer />
         <InstallPrompt />
         <NotificationScheduler />
+        <ThemeApplier />
       </div>
     </RestTimerProvider>
   );

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { db } from "@/lib/db";
 import type { ActionItem, Exercise, PlannedExercise } from "@/lib/db";
+import { kgToDisplay, type Unit } from "@/lib/units";
 import { WeeklyCheckinCard } from "./WeeklyCheckinCard";
 import { todayString, formatDayHeader } from "@/lib/dateUtils";
 import { cn } from "@/lib/utils";
@@ -88,6 +89,8 @@ function useTodayData() {
     allExercises === undefined ||
     allActionItems === undefined;
 
+  const unit: Unit = (profile?.units ?? "kg") as Unit;
+
   return {
     today,
     profile,
@@ -99,6 +102,7 @@ function useTodayData() {
     exerciseMap,
     totalProteinToday,
     todaySession,
+    unit,
     loading,
   };
 }
@@ -252,10 +256,12 @@ function ExerciseRow({
   pe,
   exercise,
   index,
+  unit,
 }: {
   pe: PlannedExercise;
   exercise: Exercise | undefined;
   index: number;
+  unit: Unit;
 }) {
   const name = exercise?.name ?? pe.exerciseId;
   const muscle = exercise?.muscleGroups[0] ?? "";
@@ -277,10 +283,10 @@ function ExerciseRow({
         </p>
         {pe.targetWeight !== null ? (
           <p className="text-xs text-muted-foreground">
-            {pe.targetWeight} kg
+            {kgToDisplay(pe.targetWeight, unit).toFixed(1)} {unit}
           </p>
         ) : (
-          <p className="text-xs text-muted-foreground">— kg</p>
+          <p className="text-xs text-muted-foreground">—</p>
         )}
         {/* Progression / deload suggestion badge */}
         {pe.suggestionType && (
@@ -295,7 +301,7 @@ function ExerciseRow({
             {pe.suggestionType === "progression" ? "🔼" : "⚠️"}{" "}
             {pe.suggestedNextReps !== null && pe.suggestedNextReps !== undefined
               ? `${pe.suggestedNextReps} reps`
-              : `${pe.suggestedNextWeight} kg`}
+              : `${kgToDisplay(pe.suggestedNextWeight ?? 0, unit).toFixed(1)} ${unit}`}
           </div>
         )}
       </div>
@@ -318,6 +324,7 @@ export function TodayView() {
     exerciseMap,
     totalProteinToday,
     todaySession,
+    unit,
     loading,
   } = useTodayData();
 
@@ -467,6 +474,7 @@ export function TodayView() {
                     pe={pe}
                     exercise={exerciseMap.get(pe.exerciseId)}
                     index={i}
+                    unit={unit}
                   />
                 </li>
               ))}

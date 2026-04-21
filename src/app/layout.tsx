@@ -35,7 +35,15 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${geist.variable} dark`}>
+    <html lang="en" className={geist.variable}>
+      <head>
+        {/* Synchronous theme init — prevents flash on cold load */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){var t=localStorage.getItem('fittrack-theme')||'dark';var dark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',dark);})();`,
+          }}
+        />
+      </head>
       <body className="antialiased bg-background text-foreground">
         <PWAProvider>{children}</PWAProvider>
       </body>
