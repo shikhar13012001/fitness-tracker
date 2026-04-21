@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -13,6 +13,99 @@ import { db, setActivePlan, duplicatePlan } from '@/lib/db';
 import type { WorkoutPlan, PlannedDayRow } from '@/lib/db';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+
+function showToast(msg: string, variant: 'default' | 'error' = 'default') {
+  if (typeof document === 'undefined') return;
+  const el = document.createElement('div');
+  el.textContent = msg;
+  const bg = variant === 'error'
+    ? 'hsl(var(--destructive))'
+    : 'hsl(var(--foreground))';
+  const fg = variant === 'error'
+    ? 'hsl(var(--destructive-foreground))'
+    : 'hsl(var(--background))';
+  el.style.cssText = [
+    'position:fixed', 'bottom:80px', 'left:50%', 'transform:translateX(-50%)',
+    `background:${bg}`, `color:${fg}`,
+    'padding:10px 18px', 'border-radius:999px', 'font-size:14px',
+    'font-weight:500', 'z-index:9999', 'pointer-events:none',
+    'white-space:nowrap', 'max-width:90vw', 'text-align:center',
+    'box-shadow:0 4px 20px rgba(0,0,0,0.35)', 'opacity:0',
+    'transition:opacity 0.2s',
+  ].join(';');
+  document.body.appendChild(el);
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  setTimeout(() => {
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 250);
+  }, 2800);
+}
+
+// ─── BottomSheet ──────────────────────────────────────────────────────────────
+
+interface SheetAction {
+  label: string;
+  variant?: 'default' | 'destructive';
+  onClick: () => void;
+}
+
+function BottomSheet({
+  open,
+  title,
+  body,
+  actions,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  body: string;
+  actions: SheetAction[];
+  onClose: () => void;
+}) {
+  // Prevent scroll while open
+  useEffect(() => {
+    if (open) document.body.style.overflow = 'hidden';
+    else document.body.style.overflow = '';
+    return () => { document.body.style.overflow = ''; };
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col justify-end">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      {/* Sheet */}
+      <div className="relative bg-card rounded-t-2xl border-t border-border p-6 flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
+        <div className="w-8 h-1 rounded-full bg-border mx-auto -mt-2 mb-1" />
+        <div className="flex flex-col gap-1.5">
+          <h2 className="text-base font-semibold text-foreground leading-snug">{title}</h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">{body}</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          {actions.map((action) => (
+            <Button
+              key={action.label}
+              variant={action.variant === 'destructive' ? 'destructive' : 'default'}
+              className="w-full"
+              onClick={() => { action.onClick(); onClose(); }}
+            >
+              {action.label}
+            </Button>
+          ))}
+          <Button variant="ghost" className="w-full" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -240,28 +333,65 @@ function SavedPlanRow({
 
 // ─── PlansView ────────────────────────────────────────────────────────────────
 
+type SheetMode =
+  | { type: 'activate'; plan: WorkoutPlan }
+  | { type: 'delete'; plan: WorkoutPlan }
+  | null;
+
 export function PlansView() {
   const router = useRouter();
   const plans = useLiveQuery(() => db.workoutPlans.orderBy('name').toArray());
   const allDays = useLiveQuery(() => db.plannedDays.toArray());
 
+  const [sheet, setSheet] = useState<SheetMode>(null);
+
   const loading = plans === undefined || allDays === undefined;
   const activePlan = plans?.find((p) => p.isActive) ?? null;
   const savedPlans = (plans ?? []).filter((p) => !p.isActive);
 
-  async function handleActivate(planId: string) {
-    await setActivePlan(planId);
+  // ── Activate ────────────────────────────────────────────────────────────────
+  function requestActivate(plan: WorkoutPlan) {
+    setSheet({ type: 'activate', plan });
   }
 
+  async function confirmActivate(plan: WorkoutPlan) {
+    try {
+      await setActivePlan(plan.id);
+      showToast(`${plan.name} is now active`);
+    } catch {
+      showToast('Failed to activate plan', 'error');
+    }
+  }
+
+  // ── Duplicate ───────────────────────────────────────────────────────────────
   async function handleDuplicate(planId: string) {
     const plan = plans?.find((p) => p.id === planId);
     if (!plan) return;
-    await duplicatePlan(planId, `${plan.name} (copy)`);
+    try {
+      await duplicatePlan(planId, `${plan.name} (copy)`);
+      showToast('Plan duplicated');
+    } catch {
+      showToast('Failed to duplicate plan', 'error');
+    }
   }
 
-  async function handleDelete(planId: string) {
-    // cascade handled by the Dexie deleting hook in db.ts
-    await db.workoutPlans.delete(planId);
+  // ── Delete ──────────────────────────────────────────────────────────────────
+  function requestDelete(plan: WorkoutPlan) {
+    if (plan.isActive) {
+      showToast("Can't delete the active plan — activate another plan first", 'error');
+      return;
+    }
+    setSheet({ type: 'delete', plan });
+  }
+
+  async function confirmDelete(plan: WorkoutPlan) {
+    try {
+      // Cascade hooks in db.ts handle days + exercises automatically
+      await db.workoutPlans.delete(plan.id);
+      showToast('Plan deleted');
+    } catch {
+      showToast('Failed to delete plan', 'error');
+    }
   }
 
   if (loading) {
@@ -280,62 +410,92 @@ export function PlansView() {
   }
 
   return (
-    <div className="px-4 pt-6 pb-6 space-y-5 max-w-lg mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-foreground">Plans</h1>
-        <button
-          className="flex items-center justify-center h-9 w-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors active:scale-95"
-          aria-label="Create new plan"
-          onClick={() => router.push('/plans/new')}
-        >
-          <Plus className="h-5 w-5" />
-        </button>
+    <>
+      <div className="px-4 pt-6 pb-6 space-y-5 max-w-lg mx-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-foreground">Plans</h1>
+          <button
+            className="flex items-center justify-center h-9 w-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors active:scale-95"
+            aria-label="Create new plan"
+            onClick={() => router.push('/plans/new')}
+          >
+            <Plus className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* ── Active ── */}
+        <section>
+          <p className="text-xs font-semibold text-muted-foreground tracking-wider uppercase mb-2.5">
+            Active
+          </p>
+          {activePlan ? (
+            <ActivePlanCard plan={activePlan} allDays={allDays ?? []} />
+          ) : (
+            <div className="rounded-2xl bg-card border border-border p-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No active plan.{' '}
+                {savedPlans.length > 0
+                  ? 'Activate one from Saved Plans below.'
+                  : 'Tap + to create one.'}
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* ── Saved Plans ── */}
+        <section>
+          <p className="text-xs font-semibold text-muted-foreground tracking-wider uppercase mb-2.5">
+            Saved Plans
+          </p>
+          {savedPlans.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No other plans saved.
+            </p>
+          ) : (
+            <div className="rounded-2xl bg-card border border-border overflow-hidden divide-y divide-border">
+              {savedPlans.map((plan) => (
+                <SavedPlanRow
+                  key={plan.id}
+                  plan={plan}
+                  allDays={allDays ?? []}
+                  onActivate={() => requestActivate(plan)}
+                  onDuplicate={() => handleDuplicate(plan.id)}
+                  onDelete={() => requestDelete(plan)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
       </div>
 
-      {/* ── Active ── */}
-      <section>
-        <p className="text-xs font-semibold text-muted-foreground tracking-wider uppercase mb-2.5">
-          Active
-        </p>
-        {activePlan ? (
-          <ActivePlanCard plan={activePlan} allDays={allDays ?? []} />
-        ) : (
-          <div className="rounded-2xl bg-card border border-border p-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              No active plan.{' '}
-              {savedPlans.length > 0
-                ? 'Activate one from Saved Plans below.'
-                : 'Tap + to create one.'}
-            </p>
-          </div>
-        )}
-      </section>
+      {/* ── Bottom sheets ── */}
+      <BottomSheet
+        open={sheet?.type === 'activate'}
+        title={`Switch to ${sheet?.type === 'activate' ? sheet.plan.name : ''}?`}
+        body="Your current progress and session history won't be affected."
+        actions={[
+          {
+            label: 'Switch plan',
+            onClick: () => sheet?.type === 'activate' && confirmActivate(sheet.plan),
+          },
+        ]}
+        onClose={() => setSheet(null)}
+      />
 
-      {/* ── Saved Plans ── */}
-      <section>
-        <p className="text-xs font-semibold text-muted-foreground tracking-wider uppercase mb-2.5">
-          Saved Plans
-        </p>
-        {savedPlans.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No other plans saved.
-          </p>
-        ) : (
-          <div className="rounded-2xl bg-card border border-border overflow-hidden divide-y divide-border">
-            {savedPlans.map((plan) => (
-              <SavedPlanRow
-                key={plan.id}
-                plan={plan}
-                allDays={allDays ?? []}
-                onActivate={() => handleActivate(plan.id)}
-                onDuplicate={() => handleDuplicate(plan.id)}
-                onDelete={() => handleDelete(plan.id)}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
+      <BottomSheet
+        open={sheet?.type === 'delete'}
+        title={`Delete ${sheet?.type === 'delete' ? sheet.plan.name : ''}?`}
+        body="This cannot be undone. All exercises configured for this plan will be removed."
+        actions={[
+          {
+            label: 'Delete',
+            variant: 'destructive',
+            onClick: () => sheet?.type === 'delete' && confirmDelete(sheet.plan),
+          },
+        ]}
+        onClose={() => setSheet(null)}
+      />
+    </>
   );
 }
