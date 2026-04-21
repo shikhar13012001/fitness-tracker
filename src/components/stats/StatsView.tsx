@@ -102,7 +102,7 @@ function useStatsData() {
   const today = todayString();
 
   const allSessions = useLiveQuery(
-    () => db.workoutSessions.where("endTime").above(0).toArray(),
+    () => db.workoutSessions.toArray(),
     []
   );
 
