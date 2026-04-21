@@ -1,36 +1,140 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FitTrack — Personal Fitness Trainer PWA
 
-## Getting Started
+A mobile-first progressive web app for tracking workouts, protein intake, bodyweight, and supplements. Built with Next.js 14, Dexie (IndexedDB), and Tailwind CSS. Fully offline-capable — all data lives in the browser, no backend required.
 
-First, run the development server:
+
+---
+
+## Features
+
+| Screen | What it does |
+|----|----|
+| **Today** | Today's workout plan, supplement checklist, protein counter |
+| **Active Session** | Full-screen workout: set logging with weight/reps, exercise navigation (swipe or tap), rest timer |
+| **Rest Timer** | Web Worker-powered (no drift when phone locks), floating pill persists across all screens, pause / +30s / skip |
+| **Stats** | Weekly workouts, current streak, weekly volume, last 5 sessions |
+| **Bodyweight** | Daily weight log, lean-bulk pace tracker (+0.25–0.5 kg/wk) |
+
+
+---
+
+## Tech Stack
+
+* **Next.js 14** (App Router, static export compatible)
+* **Dexie v4** — IndexedDB ORM, all data local
+* **Tailwind CSS** + shadcn/ui design tokens, dark mode by default
+* **Lucide React** icons
+* **TypeScript** throughout
+
+
+---
+
+## Local Development
+
+### Prerequisites
+
+* Node.js 18+
+* npm 9+
+
+### Setup
 
 ```bash
+git clone <repo-url>
+cd fitness-trainer
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open <http://localhost:3000> — it redirects to `/today` automatically.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Seeded data
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+On first load the app seeds:
 
-## Learn More
+* **"Aesthetic Lean Bulk"** workout plan — Push / Pull / Legs / Upper Aesthetic / Lower+Core
+* **30+ exercises** with muscle groups, instructions, and rest times
+* **Supplements checklist** — Creatine, Whey, Water intake
 
-To learn more about Next.js, take a look at the following resources:
+**Reset the database:** DevTools → Application → IndexedDB → `FitTrackDB` → Delete database → reload.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## Deploy to Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run build   # confirm it passes locally first
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+1. Push this repo to GitHub
+2. Go to [vercel.com/new](https://vercel.com/new) and import the repo
+3. Framework: **Next.js** (auto-detected)
+4. No environment variables needed
+5. Click **Deploy**
+
+> All data is stored in each user's browser IndexedDB — there is no server-side storage or sync between devices.
+
+
+---
+
+## Project Structure
+
+```
+src/
+├── app/
+│   ├── (app)/                    # Layout: BottomNav + RestTimerProvider
+│   │   ├── today/
+│   │   ├── session/[id]/         # Active workout screen
+│   │   ├── stats/
+│   │   └── more/bodyweight/
+│   └── globals.css
+├── components/
+│   ├── session/
+│   │   ├── WorkoutSessionView.tsx
+│   │   └── FloatingRestTimer.tsx
+│   ├── today/TodayView.tsx
+│   ├── stats/StatsView.tsx
+│   ├── more/BodyweightScreen.tsx
+│   └── nav/BottomNav.tsx
+├── context/
+│   └── RestTimerContext.tsx      # Web Worker bridge + global timer state
+└── lib/
+    ├── db.ts                     # Dexie schema & TypeScript types
+    ├── seed.ts                   # Default exercises, plan, supplements
+    └── dateUtils.ts
+public/
+└── rest-timer.worker.js          # Drift-free countdown (runs off main thread)
+```
+
+
+---
+
+## Data Model
+
+| Table | Key info |
+|----|----|
+| `exercises` | Library, seeded on first run |
+| `workoutPlans` | 7-day plans with per-day exercise targets |
+| `workoutSessions` | One row per session, stores `totalVolume` & `duration` |
+| `loggedExercises` | Per-session exercise with `loggedSets[]` |
+| `actionItems` | Supplement / habit definitions |
+| `actionItemLogs` | Daily completion records (reset each day) |
+| `proteinEntries` | Per-entry protein log with source label |
+| `bodyweightEntries` | Daily weight entries |
+| `userProfile` | Single row — protein target, active plan, units |
+
+
+---
+
+## Scripts
+
+```bash
+npm run dev        # dev server on :3000
+npm run build      # production build
+npm run start      # serve production build
+npm run lint       # ESLint
+npx tsc --noEmit   # type-check only
+```
+
+
