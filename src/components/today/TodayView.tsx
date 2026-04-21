@@ -13,7 +13,8 @@ import {
   Zap,
 } from "lucide-react";
 import { db } from "@/lib/db";
-import type { ActionItem, Exercise, PlannedExercise } from "@/lib/db";
+import type { ActionItem, Exercise, PlannedExerciseRow } from "@/lib/db";
+// PlannedExerciseRow is used in ExerciseRow below
 import { kgToDisplay, type Unit } from "@/lib/units";
 import { WeeklyCheckinCard } from "./WeeklyCheckinCard";
 import { todayString, formatDayHeader } from "@/lib/dateUtils";
@@ -28,12 +29,25 @@ function useTodayData() {
   const profile = useLiveQuery(() => db.userProfile.get(1));
 
   const activePlan = useLiveQuery(
-    () =>
-      profile?.activePlanId
-        ? db.workoutPlans.get(profile.activePlanId)
-        : undefined,
-    [profile?.activePlanId]
+    () => db.workoutPlans.filter((p) => p.isActive).first()
   );
+
+  // Today's planned day from normalised table (reactive to plan switches)
+  const todayDayRow = useLiveQuery(async () => {
+    if (!activePlan) return undefined;
+    return db.plannedDays
+      .where("planId").equals(activePlan.id)
+      .filter((d) => d.dayOfWeek === dow)
+      .first();
+  }, [activePlan?.id, dow]);
+
+  // Exercises for today's day row
+  const todayExerciseRows = useLiveQuery(async () => {
+    if (!todayDayRow?.id) return [];
+    return db.plannedExercises
+      .where("plannedDayId").equals(todayDayRow.id)
+      .sortBy("order");
+  }, [todayDayRow?.id]);
 
   const allExercises = useLiveQuery(() => db.exercises.toArray());
 
@@ -54,8 +68,7 @@ function useTodayData() {
     [today]
   );
 
-  const todayPlan = activePlan?.days[dow];
-  const isWorkoutDay = todayPlan?.type === "workout";
+  const isWorkoutDay = todayDayRow?.type === "workout";
 
   const todayActionItems = useMemo(
     () =>
@@ -86,6 +99,8 @@ function useTodayData() {
   const loading =
     profile === undefined ||
     activePlan === undefined ||
+    todayDayRow === undefined ||
+    todayExerciseRows === undefined ||
     allExercises === undefined ||
     allActionItems === undefined;
 
@@ -95,7 +110,8 @@ function useTodayData() {
     today,
     profile,
     activePlan,
-    todayPlan,
+    todayDayRow,
+    todayExerciseRows: todayExerciseRows ?? [],
     isWorkoutDay,
     todayActionItems,
     completedItemIds,
@@ -109,7 +125,7 @@ function useTodayData() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function repRangeLabel(pe: PlannedExercise): string {
+function repRangeLabel(pe: PlannedExerciseRow): string {
   if (pe.isTimed) return `${pe.targetRepMin}s`;
   if (pe.targetRepMin === pe.targetRepMax) return `${pe.targetRepMin}`;
   return `${pe.targetRepMin}–${pe.targetRepMax}`;
@@ -258,7 +274,7 @@ function ExerciseRow({
   index,
   unit,
 }: {
-  pe: PlannedExercise;
+  pe: PlannedExerciseRow;
   exercise: Exercise | undefined;
   index: number;
   unit: Unit;
@@ -317,7 +333,8 @@ export function TodayView() {
     today,
     profile,
     activePlan,
-    todayPlan,
+    todayDayRow,
+    todayExerciseRows,
     isWorkoutDay,
     todayActionItems,
     completedItemIds,
@@ -349,7 +366,7 @@ export function TodayView() {
   }
 
   async function handleStartWorkout() {
-    if (!activePlan || !todayPlan || todayPlan.type !== "workout") return;
+    if (!activePlan || !todayDayRow || todayDayRow.type !== "workout") return;
 
     // Resume existing session if one exists without an end time
     if (todaySession) {
@@ -366,7 +383,7 @@ export function TodayView() {
           id: sessionId,
           date: today,
           planId: activePlan.id,
-          dayName: todayPlan.name,
+          dayName: todayDayRow.name,
           startTime: Date.now(),
           endTime: null,
           duration: null,
@@ -375,7 +392,7 @@ export function TodayView() {
         });
 
         await db.loggedExercises.bulkAdd(
-          todayPlan.plannedExercises.map((pe) => ({
+          todayExerciseRows.map((pe) => ({
             id: crypto.randomUUID(),
             sessionId,
             exerciseId: pe.exerciseId,
@@ -404,12 +421,50 @@ export function TodayView() {
   }
 
   const proteinTarget = profile?.proteinTargetG ?? 130;
-  const exerciseCount = todayPlan?.plannedExercises.length ?? 0;
+  const exerciseCount = todayExerciseRows.length;
+  const allWeightsNull = exerciseCount > 0 && todayExerciseRows.every((r) => r.targetWeight === null);
   const sessionLabel = todaySession
     ? todaySession.endTime
       ? "View Workout"
       : "Resume Workout"
     : "Start Workout";
+
+  // ── Edge case: no active plan ───────────────────────────────────────────────
+  if (!activePlan) {
+    return (
+      <div className="px-4 pt-6 pb-6 space-y-4 max-w-lg mx-auto">
+        <div>
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">
+            {formatDayHeader(new Date())}
+          </p>
+          <h1 className="text-2xl font-bold text-foreground mt-1">Today</h1>
+        </div>
+        <WeeklyCheckinCard />
+        <ProteinCard total={totalProteinToday} target={proteinTarget} />
+        <SupplementChecklist
+          items={todayActionItems}
+          completedIds={completedItemIds}
+          onToggle={toggleActionItem}
+        />
+        <div className="rounded-2xl bg-card border border-border p-8 flex flex-col items-center gap-4 text-center">
+          <span className="text-4xl">📋</span>
+          <div>
+            <p className="text-sm font-semibold text-foreground">No active plan</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Set one up in the Plans tab to see today&apos;s workout here.
+            </p>
+          </div>
+          <button
+            onClick={() => router.push('/plans')}
+            className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Go to Plans
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -424,18 +479,18 @@ export function TodayView() {
           {isWorkoutDay ? (
             <>
               <Dumbbell className="h-6 w-6 text-primary" />
-              {todayPlan?.name} Day
+              {todayDayRow?.name} Day
             </>
           ) : (
             <>
               <Moon className="h-6 w-6 text-muted-foreground" />
-              Rest Day
+              Rest Day 🧘
             </>
           )}
         </h1>
         {isWorkoutDay && (
           <p className="text-sm text-muted-foreground mt-0.5">
-            {exerciseCount} exercises · {activePlan?.name}
+            {exerciseCount} exercise{exerciseCount !== 1 ? 's' : ''} · {activePlan?.name}
           </p>
         )}
       </div>
@@ -454,7 +509,7 @@ export function TodayView() {
       />
 
       {/* Workout card */}
-      {isWorkoutDay && todayPlan ? (
+      {isWorkoutDay && todayDayRow ? (
         <div className="rounded-2xl bg-card border border-border overflow-hidden">
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <span className="text-sm font-medium text-foreground">
@@ -464,20 +519,25 @@ export function TodayView() {
               Sets × Reps
             </span>
           </div>
+
+          {/* First-session banner */}
+          {allWeightsNull && (
+            <div className="mx-4 mt-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20 px-3.5 py-2.5 text-xs text-yellow-400 font-medium">
+              First session — enter your starting weights as you go
+            </div>
+          )}
+
           <ul className="divide-y divide-border">
-            {todayPlan.plannedExercises
-              .slice()
-              .sort((a, b) => a.order - b.order)
-              .map((pe, i) => (
-                <li key={pe.exerciseId + i}>
-                  <ExerciseRow
-                    pe={pe}
-                    exercise={exerciseMap.get(pe.exerciseId)}
-                    index={i}
-                    unit={unit}
-                  />
-                </li>
-              ))}
+            {todayExerciseRows.map((pe, i) => (
+              <li key={pe.id ?? i}>
+                <ExerciseRow
+                  pe={pe}
+                  exercise={exerciseMap.get(pe.exerciseId)}
+                  index={i}
+                  unit={unit}
+                />
+              </li>
+            ))}
           </ul>
 
           <div className="px-4 py-4 border-t border-border">
@@ -496,7 +556,7 @@ export function TodayView() {
             </button>
           </div>
         </div>
-      ) : (
+      ) : !isWorkoutDay ? (
         <div className="rounded-2xl bg-card border border-border p-8 flex flex-col items-center gap-3 text-center">
           <Moon className="h-10 w-10 text-muted-foreground" />
           <p className="text-sm font-medium text-foreground">
@@ -506,7 +566,7 @@ export function TodayView() {
             Hit your protein and supplement targets — that&apos;s today&apos;s job.
           </p>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

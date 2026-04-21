@@ -502,7 +502,7 @@ export function DayEditView({
         <div className="space-y-2">
           {drafts.length === 0 && (
             <p className="text-sm text-muted-foreground text-center py-8">
-              No exercises. Tap + Add Exercise below.
+              No exercises yet — tap + Add Exercise to start.
             </p>
           )}
 

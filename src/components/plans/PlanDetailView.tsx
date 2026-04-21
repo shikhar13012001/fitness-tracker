@@ -328,6 +328,14 @@ export function PlanDetailView({ planId }: { planId: string }) {
     );
   }
 
+  // Dev-mode persistence check — logs plan + days + exercises on mount/change
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[PlanDetailView] persisted plan:', plan.name, {
+      days: allDays?.length,
+      exercises: allExerciseRows?.length,
+    });
+  }
+
   // ── Build dayId → sorted exercises map ────────────────────────────────────
 
   const exercisesByDay = new Map<number, PlannedExerciseRow[]>();
