@@ -116,25 +116,29 @@ export async function analyzeProgressionAfterSession(
   const session = await db.workoutSessions.get(sessionId);
   if (!session?.endTime) return;
 
-  const profile = await db.userProfile.get(1);
-  if (!profile?.activePlanId) return;
-
-  const plan = await db.workoutPlans.get(profile.activePlanId);
-  if (!plan) return;
-
   const loggedExercises = await db.loggedExercises
     .where("sessionId")
     .equals(sessionId)
     .toArray();
-
   if (!loggedExercises.length) return;
 
   const exercises = await db.exercises.toArray();
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
 
   const dow = new Date(session.date + "T12:00:00").getDay();
-  const plannedDay = plan.days[dow];
-  if (!plannedDay || plannedDay.type !== "workout") return;
+
+  // ── Look up planned day + exercises from normalised tables ────────────────
+  const plannedDay = await db.plannedDays
+    .where("planId")
+    .equals(session.planId)
+    .filter((d) => d.dayOfWeek === dow)
+    .first();
+  if (!plannedDay || plannedDay.type !== "workout" || !plannedDay.id) return;
+
+  const plannedExercises = await db.plannedExercises
+    .where("plannedDayId")
+    .equals(plannedDay.id)
+    .toArray();
 
   // ── Build a map of most-recent prior logged exercise per exerciseId ──────
   const prevLoggedMap = new Map<string, typeof loggedExercises[0]>();
@@ -145,7 +149,6 @@ export async function analyzeProgressionAfterSession(
     .toArray();
   prevSessions.sort((a, b) => b.date.localeCompare(a.date));
 
-  // Walk back through recent sessions to get last-known log for each exercise
   for (const ps of prevSessions.slice(0, 10)) {
     const prevLogs = await db.loggedExercises
       .where("sessionId")
@@ -156,100 +159,81 @@ export async function analyzeProgressionAfterSession(
         prevLoggedMap.set(pl.exerciseId, pl);
       }
     }
-    // Stop early if we have all exercises
     if (prevLoggedMap.size >= loggedExercises.length) break;
   }
 
-  // ── Compute suggestions for each planned exercise ─────────────────────────
-  const updatedDays = plan.days.map((day, idx) => {
-    if (idx !== dow) return day;
+  // ── Compute + write suggestions for each planned exercise ─────────────────
+  for (const pe of plannedExercises) {
+    if (pe.id == null) continue;
+    const logged = loggedExercises.find((le) => le.exerciseId === pe.exerciseId);
+    if (!logged || logged.loggedSets.length === 0) continue;
 
-    const updatedExercises = day.plannedExercises.map((pe) => {
-      const logged = loggedExercises.find(
-        (le) => le.exerciseId === pe.exerciseId
-      );
-      if (!logged || logged.loggedSets.length === 0) return pe;
+    const exercise = exerciseMap.get(pe.exerciseId);
+    const isCompound = exercise?.isCompound ?? false;
+    const doneSets = logged.loggedSets;
 
-      const exercise = exerciseMap.get(pe.exerciseId);
-      const isCompound = exercise?.isCompound ?? false;
-      const doneSets = logged.loggedSets;
+    const allHitTarget =
+      doneSets.length >= pe.targetSets &&
+      doneSets.every((s) => s.reps >= pe.targetRepMin);
 
-      // Did every done set hit at least the minimum target reps?
-      const allHitTarget =
-        doneSets.length >= pe.targetSets &&
-        doneSets.every((s) => s.reps >= pe.targetRepMin);
+    type SuggestionUpdate = {
+      suggestedNextWeight: number | null;
+      suggestedNextReps: number | null;
+      suggestionType: "progression" | "deload" | null;
+    };
+    let update: SuggestionUpdate;
 
-      if (allHitTarget) {
-        // ── Progression ──────────────────────────────────────────────────
-        if (isCompound) {
-          return {
-            ...pe,
-            suggestedNextWeight: (pe.targetWeight ?? 0) + 2.5,
-            suggestedNextReps: null as number | null,
-            suggestionType: "progression" as const,
+    if (allHitTarget) {
+      if (isCompound) {
+        update = {
+          suggestedNextWeight: (pe.targetWeight ?? 0) + 2.5,
+          suggestedNextReps: null,
+          suggestionType: "progression",
+        };
+      } else {
+        const avgReps =
+          doneSets.reduce((s, set) => s + set.reps, 0) / doneSets.length;
+        if (avgReps >= pe.targetRepMax) {
+          update = {
+            suggestedNextWeight: (pe.targetWeight ?? 0) + 1,
+            suggestedNextReps: null,
+            suggestionType: "progression",
           };
         } else {
-          // Did all sets also hit the top of the rep range?
-          const avgReps =
-            doneSets.reduce((s, set) => s + set.reps, 0) / doneSets.length;
-          if (avgReps >= pe.targetRepMax) {
-            // Hit top of range → bump weight
-            return {
-              ...pe,
-              suggestedNextWeight: (pe.targetWeight ?? 0) + 1,
-              suggestedNextReps: null as number | null,
-              suggestionType: "progression" as const,
-            };
-          } else {
-            // Not yet at top of range → bump reps
-            return {
-              ...pe,
-              suggestedNextWeight: pe.targetWeight,
-              suggestedNextReps: pe.targetRepMin + 1,
-              suggestionType: "progression" as const,
-            };
-          }
+          update = {
+            suggestedNextWeight: pe.targetWeight,
+            suggestedNextReps: pe.targetRepMin + 1,
+            suggestionType: "progression",
+          };
+        }
+      }
+    } else {
+      const prevLogged = prevLoggedMap.get(pe.exerciseId);
+      if (prevLogged && prevLogged.loggedSets.length > 0) {
+        const prevDoneSets = prevLogged.loggedSets;
+        const prevHitTarget =
+          prevDoneSets.length >= pe.targetSets &&
+          prevDoneSets.every((s) => s.reps >= pe.targetRepMin);
+        const currentWeight = doneSets[0]?.weight ?? (pe.targetWeight ?? 0);
+        const prevWeight = prevDoneSets[0]?.weight ?? (pe.targetWeight ?? 0);
+
+        if (!prevHitTarget && Math.abs(currentWeight - prevWeight) < 0.01) {
+          const deloadWeight = Math.round(currentWeight * 0.9 * 4) / 4;
+          update = {
+            suggestedNextWeight: deloadWeight,
+            suggestedNextReps: null,
+            suggestionType: "deload",
+          };
+        } else {
+          update = { suggestedNextWeight: null, suggestedNextReps: null, suggestionType: null };
         }
       } else {
-        // ── Deload check ─────────────────────────────────────────────────
-        const prevLogged = prevLoggedMap.get(pe.exerciseId);
-        if (prevLogged && prevLogged.loggedSets.length > 0) {
-          const prevDoneSets = prevLogged.loggedSets;
-          const prevHitTarget =
-            prevDoneSets.length >= pe.targetSets &&
-            prevDoneSets.every((s) => s.reps >= pe.targetRepMin);
-
-          const currentWeight =
-            doneSets[0]?.weight ?? (pe.targetWeight ?? 0);
-          const prevWeight =
-            prevDoneSets[0]?.weight ?? (pe.targetWeight ?? 0);
-
-          if (!prevHitTarget && Math.abs(currentWeight - prevWeight) < 0.01) {
-            // Two consecutive failures at same weight → deload 10%
-            const deloadWeight = Math.round(currentWeight * 0.9 * 4) / 4;
-            return {
-              ...pe,
-              suggestedNextWeight: deloadWeight,
-              suggestedNextReps: null as number | null,
-              suggestionType: "deload" as const,
-            };
-          }
-        }
-
-        // Clear any stale suggestion (this attempt neither progressed nor deloaded)
-        return {
-          ...pe,
-          suggestedNextWeight: null as number | null,
-          suggestedNextReps: null as number | null,
-          suggestionType: null as "progression" | "deload" | null,
-        };
+        update = { suggestedNextWeight: null, suggestedNextReps: null, suggestionType: null };
       }
-    });
+    }
 
-    return { ...day, plannedExercises: updatedExercises };
-  });
-
-  await db.workoutPlans.update(plan.id, { days: updatedDays });
+    await db.plannedExercises.update(pe.id, update);
+  }
 }
 
 // ─── Accept / dismiss suggestion ──────────────────────────────────────────────
@@ -261,33 +245,31 @@ export async function acceptSuggestion(
 ): Promise<{ newWeight: number | null; newReps: number | null }> {
   if (!db) return { newWeight: null, newReps: null };
 
-  const plan = await db.workoutPlans.get(planId);
-  if (!plan) return { newWeight: null, newReps: null };
+  const plannedDay = await db.plannedDays
+    .where("planId")
+    .equals(planId)
+    .filter((d) => d.dayOfWeek === dow)
+    .first();
+  if (!plannedDay?.id) return { newWeight: null, newReps: null };
 
-  let newWeight: number | null = null;
-  let newReps: number | null = null;
+  const pe = await db.plannedExercises
+    .where("plannedDayId")
+    .equals(plannedDay.id)
+    .filter((e) => e.exerciseId === exerciseId)
+    .first();
+  if (!pe?.id) return { newWeight: null, newReps: null };
 
-  const updatedDays = plan.days.map((day, idx) => {
-    if (idx !== dow) return day;
-    return {
-      ...day,
-      plannedExercises: day.plannedExercises.map((pe) => {
-        if (pe.exerciseId !== exerciseId) return pe;
-        newWeight = pe.suggestedNextWeight ?? null;
-        newReps = pe.suggestedNextReps ?? null;
-        return {
-          ...pe,
-          targetWeight: pe.suggestedNextWeight ?? pe.targetWeight,
-          targetRepMin: pe.suggestedNextReps ?? pe.targetRepMin,
-          suggestedNextWeight: null as number | null,
-          suggestedNextReps: null as number | null,
-          suggestionType: null as "progression" | "deload" | null,
-        };
-      }),
-    };
+  const newWeight = pe.suggestedNextWeight ?? null;
+  const newReps = pe.suggestedNextReps ?? null;
+
+  await db.plannedExercises.update(pe.id, {
+    targetWeight: pe.suggestedNextWeight ?? pe.targetWeight,
+    targetRepMin: pe.suggestedNextReps ?? pe.targetRepMin,
+    suggestedNextWeight: null,
+    suggestedNextReps: null,
+    suggestionType: null,
   });
 
-  await db.workoutPlans.update(planId, { days: updatedDays });
   return { newWeight, newReps };
 }
 
@@ -298,24 +280,23 @@ export async function dismissSuggestion(
 ): Promise<void> {
   if (!db) return;
 
-  const plan = await db.workoutPlans.get(planId);
-  if (!plan) return;
+  const plannedDay = await db.plannedDays
+    .where("planId")
+    .equals(planId)
+    .filter((d) => d.dayOfWeek === dow)
+    .first();
+  if (!plannedDay?.id) return;
 
-  const updatedDays = plan.days.map((day, idx) => {
-    if (idx !== dow) return day;
-    return {
-      ...day,
-      plannedExercises: day.plannedExercises.map((pe) => {
-        if (pe.exerciseId !== exerciseId) return pe;
-        return {
-          ...pe,
-          suggestedNextWeight: null as number | null,
-          suggestedNextReps: null as number | null,
-          suggestionType: null as "progression" | "deload" | null,
-        };
-      }),
-    };
+  const pe = await db.plannedExercises
+    .where("plannedDayId")
+    .equals(plannedDay.id)
+    .filter((e) => e.exerciseId === exerciseId)
+    .first();
+  if (!pe?.id) return;
+
+  await db.plannedExercises.update(pe.id, {
+    suggestedNextWeight: null,
+    suggestedNextReps: null,
+    suggestionType: null,
   });
-
-  await db.workoutPlans.update(planId, { days: updatedDays });
 }

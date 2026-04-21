@@ -20,7 +20,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { db } from "@/lib/db";
-import type { LoggedSet, PlannedExercise } from "@/lib/db";
+import type { LoggedSet, PlannedExerciseRow } from "@/lib/db";
 import { kgToDisplay, displayToKg, type Unit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import { useRestTimer } from "@/context/RestTimerContext";
@@ -178,7 +178,7 @@ function ProgressionSuggestionBar({
   onAccept,
   onDismiss,
 }: {
-  planned: PlannedExercise;
+  planned: PlannedExerciseRow;
   unit: Unit;
   onAccept: () => void;
   onDismiss: () => void;
@@ -328,14 +328,31 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
   );
   const profile = useLiveQuery(() => db.userProfile.get(1));
   const unit: Unit = (profile?.units ?? "kg") as Unit;
-  const activePlan = useLiveQuery(
-    () =>
-      profile?.activePlanId
-        ? db.workoutPlans.get(profile.activePlanId)
-        : undefined,
-    [profile?.activePlanId]
-  );
   const allExercises = useLiveQuery(() => db.exercises.toArray());
+
+  // Day-of-week for the session date (used for accept/dismiss suggestion)
+  const sessionDow = useMemo(() => {
+    if (!session) return 0;
+    return new Date(session.date + "T12:00:00").getDay();
+  }, [session]);
+
+  // Normalised planned day + exercises from DB
+  const plannedDayRow = useLiveQuery(async () => {
+    if (!session) return undefined;
+    return db.plannedDays
+      .where("planId")
+      .equals(session.planId)
+      .filter((d) => d.dayOfWeek === sessionDow)
+      .first();
+  }, [session?.planId, sessionDow]);
+
+  const plannedExerciseRows = useLiveQuery(async () => {
+    if (!plannedDayRow?.id) return [];
+    return db.plannedExercises
+      .where("plannedDayId")
+      .equals(plannedDayRow.id)
+      .sortBy("order");
+  }, [plannedDayRow?.id]);
 
   // ── Local state ───────────────────────────────────────────────────────────────
   const [exerciseIndex, setExerciseIndex] = useState(0);
@@ -367,23 +384,10 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     [allExercises]
   );
 
-  // Day-of-week for the session date (used for accept/dismiss suggestion)
-  const sessionDow = useMemo(() => {
-    if (!session) return 0;
-    return new Date(session.date + "T12:00:00").getDay();
-  }, [session]);
-
-  const plannedDay = useMemo(() => {
-    if (!activePlan || !session) return null;
-    // Parse date as local noon to avoid DST edge cases
-    const dow = new Date(session.date + "T12:00:00").getDay();
-    return activePlan.days[dow];
-  }, [activePlan, session]);
-
   const orderedPairs = useMemo(() => {
-    if (!loggedExercises || !plannedDay) return [];
-    const planMap = new Map<string, PlannedExercise>(
-      plannedDay.plannedExercises.map((pe) => [pe.exerciseId, pe])
+    if (!loggedExercises || !plannedExerciseRows) return [];
+    const planMap = new Map<string, PlannedExerciseRow>(
+      plannedExerciseRows.map((pe) => [pe.exerciseId, pe])
     );
     return loggedExercises
       .map((le) => ({
@@ -392,7 +396,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
         exercise: exerciseMap.get(le.exerciseId),
       }))
       .sort((a, b) => (a.planned?.order ?? 0) - (b.planned?.order ?? 0));
-  }, [loggedExercises, plannedDay, exerciseMap]);
+  }, [loggedExercises, plannedExerciseRows, exerciseMap]);
 
   // Exercise IDs in this session — declared after orderedPairs
   const exerciseIdsInSession = useMemo(
@@ -526,7 +530,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     }
   }
 
-  function addSet(leId: string, planned: PlannedExercise | null) {
+  function addSet(leId: string, planned: PlannedExerciseRow | null) {
     setSetsMap((prev) => {
       const sets = prev[leId] ?? [];
       const last = sets[sets.length - 1];
@@ -556,9 +560,8 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
 
   // ── Accept / dismiss progression suggestion ─────────────────────────────────
   async function handleAcceptSuggestion(exerciseId: string) {
-    if (!activePlan) return;
-    const result = await acceptSuggestion(exerciseId, activePlan.id, sessionDow);
-    // Pre-fill draft weights with new value for not-yet-done sets
+    if (!session) return;
+    const result = await acceptSuggestion(exerciseId, session.planId, sessionDow);
     if (result.newWeight !== null) {
       const leId = orderedPairs.find(
         (p) => p.logged.exerciseId === exerciseId
@@ -575,8 +578,8 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
   }
 
   async function handleDismissSuggestion(exerciseId: string) {
-    if (!activePlan) return;
-    await dismissSuggestion(exerciseId, activePlan.id, sessionDow);
+    if (!session) return;
+    await dismissSuggestion(exerciseId, session.planId, sessionDow);
   }
 
   // ── Finish workout ──────────────────────────────────────────────────────────
@@ -648,7 +651,7 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     session === undefined ||
     loggedExercises === undefined ||
     profile === undefined ||
-    activePlan === undefined ||
+    plannedExerciseRows === undefined ||
     allExercises === undefined ||
     orderedPairs.length === 0;
 

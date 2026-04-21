@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ChevronLeft, ChevronUp, ChevronDown, X, Plus } from 'lucide-react';
 import { db } from '@/lib/db';
 import type { PlannedExerciseRow } from '@/lib/db';
 import { cn } from '@/lib/utils';
+import { ExercisePicker } from './ExercisePicker';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -338,6 +339,13 @@ export function DayEditView({
   const originalSnap = useRef<string>('');
   const [isSaving, setIsSaving] = useState(false);
   const [discardDialog, setDiscardDialog] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+
+  // Set of exerciseIds already in drafts — passed to picker to grey them out
+  const addedExerciseIds = useMemo(
+    () => new Set(drafts.map((d) => d.exerciseId)),
+    [drafts],
+  );
 
   // Initialise drafts once data arrives (only once — don't re-init on Dexie live updates)
   useEffect(() => {
@@ -525,13 +533,36 @@ export function DayEditView({
         {/* ── Add Exercise ── */}
         <button
           className="mt-4 w-full flex items-center justify-center gap-2 h-12 rounded-xl border border-dashed border-border text-sm font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors active:scale-[0.98]"
-          onClick={() => {
-            // Bottom sheet picker — wired up in the next prompt
-          }}
+          onClick={() => setShowPicker(true)}
         >
           <Plus className="h-4 w-4" />
           Add Exercise
         </button>
+
+        {/* Exercise picker bottom sheet */}
+        <ExercisePicker
+          open={showPicker}
+          onClose={() => setShowPicker(false)}
+          addedIds={addedExerciseIds}
+          onSelect={(exerciseId, name) => {
+            setDrafts((prev) => [
+              ...prev,
+              {
+                rowId: undefined,
+                exerciseId,
+                name,
+                sets: '3',
+                repMin: '8',
+                repMax: '10',
+                weight: '',
+                rest: '90',
+                isTimed: false,
+                notes: '',
+                removePending: false,
+              },
+            ]);
+          }}
+        />
 
         {/* Unsaved indicator */}
         {isDirty && (
