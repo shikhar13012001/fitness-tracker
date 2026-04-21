@@ -340,7 +340,10 @@ type SheetMode =
 
 export function PlansView() {
   const router = useRouter();
-  const plans = useLiveQuery(() => db.workoutPlans.orderBy('name').toArray());
+  const plans = useLiveQuery(async () => {
+    const all = await db.workoutPlans.toArray();
+    return all.sort((a, b) => a.name.localeCompare(b.name));
+  });
   const allDays = useLiveQuery(() => db.plannedDays.toArray());
 
   const [sheet, setSheet] = useState<SheetMode>(null);

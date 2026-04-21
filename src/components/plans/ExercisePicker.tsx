@@ -2,20 +2,19 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Search, X, Plus } from 'lucide-react';
+import { Search, X, Plus, Check } from 'lucide-react';
 import { db } from '@/lib/db';
 import type { Exercise } from '@/lib/db';
 import { cn } from '@/lib/utils';
 
 // ─── Muscle group filter chips ────────────────────────────────────────────────
 
-const MUSCLE_CHIPS: { label: string; groups: string[] }[] = [
-  { label: 'Chest',     groups: ['Chest', 'Upper Chest'] },
-  { label: 'Back',      groups: ['Lats', 'Rhomboids', 'Lower Back', 'Mid Back'] },
-  { label: 'Shoulders', groups: ['Shoulders', 'Side Delts', 'Rear Delts'] },
-  { label: 'Arms',      groups: ['Biceps', 'Triceps'] },
-  { label: 'Legs',      groups: ['Quads', 'Hamstrings', 'Glutes', 'Calves', 'Legs', 'Hips'] },
-  { label: 'Core',      groups: ['Core', 'Abs'] },
+const MUSCLE_CHIPS: { label: string; groups: string[]; isCustom?: boolean }[] = [
+  { label: 'Push',   groups: ['Chest', 'Upper Chest', 'Shoulders', 'Side Delts', 'Triceps'] },
+  { label: 'Pull',   groups: ['Lats', 'Rhomboids', 'Mid Back', 'Lower Back', 'Rear Delts', 'Biceps'] },
+  { label: 'Legs',   groups: ['Quads', 'Hamstrings', 'Glutes', 'Calves', 'Legs', 'Hips'] },
+  { label: 'Core',   groups: ['Core', 'Abs'] },
+  { label: 'Custom', groups: [], isCustom: true },
 ];
 
 // ─── Custom exercise creation form ───────────────────────────────────────────
@@ -126,6 +125,7 @@ export function ExercisePicker({
   const [search, setSearch] = useState('');
   const [filterChip, setFilterChip] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [recentlyAdded, setRecentlyAdded] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
 
   const allExercises = useLiveQuery(() =>
@@ -141,6 +141,7 @@ export function ExercisePicker({
       setSearch('');
       setFilterChip(null);
       setShowCreate(false);
+      setRecentlyAdded(new Set());
     }
   }, [open]);
 
@@ -158,11 +159,15 @@ export function ExercisePicker({
       ex.name.toLowerCase().includes(q) ||
       ex.muscleGroups.some((m) => m.toLowerCase().includes(q));
 
-    const matchChip =
-      !filterChip ||
-      (MUSCLE_CHIPS.find((c) => c.label === filterChip)?.groups.some((g) =>
-        ex.muscleGroups.includes(g)
-      ) ?? false);
+    let matchChip = true;
+    if (filterChip) {
+      const chip = MUSCLE_CHIPS.find((c) => c.label === filterChip);
+      if (chip?.isCustom) {
+        matchChip = !!ex.isCustom;
+      } else if (chip) {
+        matchChip = chip.groups.some((g) => ex.muscleGroups.includes(g));
+      }
+    }
 
     return matchSearch && matchChip;
   });
@@ -211,6 +216,18 @@ export function ExercisePicker({
           {/* Filter chips */}
           <div className="flex gap-2 overflow-x-auto pb-3 -mx-1 px-1"
                style={{ scrollbarWidth: 'none' }}>
+            {/* All chip */}
+            <button
+              onClick={() => setFilterChip(null)}
+              className={cn(
+                'shrink-0 h-7 px-3.5 rounded-full text-xs font-medium transition-colors',
+                filterChip === null
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:text-foreground',
+              )}
+            >
+              All
+            </button>
             {MUSCLE_CHIPS.map((chip) => (
               <button
                 key={chip.label}
@@ -234,33 +251,54 @@ export function ExercisePicker({
 
         {/* Exercise list */}
         <div className="flex-1 overflow-y-auto divide-y divide-border/30 min-h-0">
-          {filtered.length === 0 ? (
-            <p className="px-5 py-10 text-sm text-muted-foreground text-center">
+          {/* + Create custom exercise — always at top */}
+          {!showCreate && (
+            <button
+              onClick={() => setShowCreate(true)}
+              className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 transition-colors"
+            >
+              <div className="h-7 w-7 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+                <Plus className="h-3.5 w-3.5 text-primary" />
+              </div>
+              <span className="text-sm font-medium text-primary">Create custom exercise</span>
+            </button>
+          )}
+
+          {filtered.length === 0 && !showCreate ? (
+            <p className="px-5 py-8 text-sm text-muted-foreground text-center">
               No exercises match.
-              <br />
-              <button
-                className="mt-2 text-primary underline text-sm"
-                onClick={() => setShowCreate(true)}
-              >
-                Create a custom one →
-              </button>
             </p>
           ) : (
             filtered.map((ex) => {
               const already = addedIds.has(ex.id);
+              const justAdded = recentlyAdded.has(ex.id);
               return (
                 <button
                   key={ex.id}
                   onClick={() => {
                     if (already) return;
                     onSelect(ex.id, ex.name);
-                    onClose();
+                    setRecentlyAdded((prev) => {
+                      const next = new Set(prev);
+                      next.add(ex.id);
+                      // Clear flash after 1.5s
+                      setTimeout(() => {
+                        setRecentlyAdded((p) => {
+                          const n = new Set(p);
+                          n.delete(ex.id);
+                          return n;
+                        });
+                      }, 1500);
+                      return next;
+                    });
                   }}
                   disabled={already}
                   className={cn(
                     'w-full flex items-center gap-3 px-4 py-3 text-left transition-colors',
                     already
                       ? 'opacity-35 cursor-default'
+                      : justAdded
+                      ? 'bg-emerald-500/15'
                       : 'hover:bg-muted/40 active:bg-muted/60',
                   )}
                 >
@@ -289,6 +327,8 @@ export function ExercisePicker({
                   </div>
                   {already ? (
                     <span className="text-xs text-muted-foreground shrink-0">Added</span>
+                  ) : justAdded ? (
+                    <Check className="h-4 w-4 text-emerald-400 shrink-0" />
                   ) : (
                     <Plus className="h-4 w-4 text-muted-foreground shrink-0" />
                   )}
@@ -298,23 +338,30 @@ export function ExercisePicker({
           )}
         </div>
 
-        {/* Create custom footer / form */}
+        {/* Custom exercise form OR Done button */}
         {showCreate ? (
           <CustomExerciseForm
             onCreated={(ex) => {
               onSelect(ex.id, ex.name);
-              onClose();
+              setShowCreate(false);
+              setRecentlyAdded((prev) => {
+                const next = new Set(prev);
+                next.add(ex.id);
+                setTimeout(() => {
+                  setRecentlyAdded((p) => { const n = new Set(p); n.delete(ex.id); return n; });
+                }, 1500);
+                return next;
+              });
             }}
             onCancel={() => setShowCreate(false)}
           />
         ) : (
           <div className="border-t border-border p-4 shrink-0">
             <button
-              onClick={() => setShowCreate(true)}
-              className="w-full flex items-center justify-center gap-2 h-10 rounded-xl border border-dashed border-border text-sm font-medium text-muted-foreground hover:text-primary hover:border-primary transition-colors"
+              onClick={onClose}
+              className="w-full h-11 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors"
             >
-              <Plus className="h-4 w-4" />
-              Create custom exercise
+              Done
             </button>
           </div>
         )}
