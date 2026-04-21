@@ -15,11 +15,21 @@ import {
   Trophy,
   Plus,
   X,
+  Award,
+  TrendingUp,
+  AlertTriangle,
 } from "lucide-react";
 import { db } from "@/lib/db";
 import type { LoggedSet, PlannedExercise } from "@/lib/db";
 import { cn } from "@/lib/utils";
 import { useRestTimer } from "@/context/RestTimerContext";
+import {
+  checkPRsInMemory,
+  recordPRs,
+  analyzeProgressionAfterSession,
+  acceptSuggestion,
+  dismissSuggestion,
+} from "@/lib/progression";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,6 +76,8 @@ function SetRow({
   onRepsChange,
   onToggle,
   onRemove,
+  isPR,
+  isNewPR,
 }: {
   index: number;
   set: SetDraft;
@@ -74,23 +86,31 @@ function SetRow({
   onRepsChange: (v: string) => void;
   onToggle: () => void;
   onRemove: () => void;
+  isPR?: boolean;
+  isNewPR?: boolean;
 }) {
   return (
     <div
       className={cn(
-        "grid gap-2 items-center px-2 py-2 rounded-xl transition-colors",
+        "grid gap-2 items-center px-2 py-2 rounded-xl transition-colors duration-700",
         "grid-cols-[1.5rem_1fr_1fr_2.5rem_1.75rem]",
-        set.done ? "bg-green-500/10" : "bg-card border border-border"
+        isNewPR
+          ? "bg-amber-500/25 border border-amber-500/50"
+          : isPR
+          ? "bg-amber-500/10 border border-amber-500/30"
+          : set.done
+          ? "bg-green-500/10"
+          : "bg-card border border-border"
       )}
     >
-      {/* Set number */}
+      {/* Set number / PR icon */}
       <span
         className={cn(
           "text-xs font-mono text-center font-semibold",
-          set.done ? "text-green-400" : "text-muted-foreground"
+          isPR ? "text-amber-400" : set.done ? "text-green-400" : "text-muted-foreground"
         )}
       >
-        {index + 1}
+        {isPR ? "🏆" : index + 1}
       </span>
 
       {/* Weight */}
@@ -120,12 +140,18 @@ function SetRow({
         onClick={onToggle}
         className={cn(
           "h-10 w-10 rounded-xl flex items-center justify-center transition-colors",
-          set.done
+          set.done && isPR
+            ? "bg-amber-500 text-white"
+            : set.done
             ? "bg-green-500 text-white"
             : "bg-muted text-muted-foreground hover:bg-green-500/20 hover:text-green-400 active:bg-green-500/30"
         )}
       >
-        <Check className="h-4 w-4" />
+        {set.done && isPR ? (
+          <Award className="h-4 w-4" />
+        ) : (
+          <Check className="h-4 w-4" />
+        )}
       </button>
 
       {/* Remove */}
@@ -139,6 +165,80 @@ function SetRow({
       ) : (
         <span />
       )}
+    </div>
+  );
+}
+
+// ─── Progression Suggestion Bar ────────────────────────────────────────────────
+
+function ProgressionSuggestionBar({
+  planned,
+  onAccept,
+  onDismiss,
+}: {
+  planned: PlannedExercise;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  if (!planned.suggestionType) return null;
+
+  const isDeload = planned.suggestionType === "deload";
+  const hasWeightSuggestion =
+    planned.suggestedNextWeight !== null &&
+    planned.suggestedNextWeight !== undefined;
+  const hasRepSuggestion =
+    planned.suggestedNextReps !== null &&
+    planned.suggestedNextReps !== undefined;
+
+  const label = isDeload
+    ? `Deload → ${planned.suggestedNextWeight} kg (was ${planned.targetWeight} kg)`
+    : hasRepSuggestion
+    ? `Suggested: ${planned.suggestedNextReps} reps (was ${planned.targetRepMin})`
+    : hasWeightSuggestion
+    ? `Suggested: ${planned.suggestedNextWeight} kg (was ${planned.targetWeight} kg)`
+    : null;
+
+  if (!label) return null;
+
+  return (
+    <div
+      className={cn(
+        "mt-2 flex items-center gap-2 rounded-xl px-3 py-2",
+        isDeload
+          ? "bg-yellow-500/10 border border-yellow-500/20"
+          : "bg-green-500/10 border border-green-500/20"
+      )}
+    >
+      {isDeload ? (
+        <AlertTriangle className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
+      ) : (
+        <TrendingUp className="h-3.5 w-3.5 text-green-400 shrink-0" />
+      )}
+      <span
+        className={cn(
+          "flex-1 text-xs font-medium",
+          isDeload ? "text-yellow-300" : "text-green-300"
+        )}
+      >
+        {label}
+      </span>
+      <button
+        onClick={onAccept}
+        className={cn(
+          "text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors",
+          isDeload
+            ? "bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 active:bg-yellow-500/40"
+            : "bg-green-500/20 text-green-300 hover:bg-green-500/30 active:bg-green-500/40"
+        )}
+      >
+        Accept
+      </button>
+      <button
+        onClick={onDismiss}
+        className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-1 rounded-lg hover:bg-muted transition-colors"
+      >
+        Dismiss
+      </button>
     </div>
   );
 }
@@ -160,7 +260,7 @@ function SummaryScreen({
   summary,
   onDone,
 }: {
-  summary: { duration: number; totalVolume: number; exercisesDone: number };
+  summary: { duration: number; totalVolume: number; exercisesDone: number; prCount: number };
   onDone: () => void;
 }) {
   return (
@@ -170,9 +270,18 @@ function SummaryScreen({
           <Trophy className="h-12 w-12 text-green-400" />
         </div>
         <h1 className="text-3xl font-bold text-foreground">Workout Done!</h1>
-        <p className="text-sm text-muted-foreground max-w-[26ch]">
-          Excellent work. Your session has been saved.
-        </p>
+        {summary.prCount > 0 ? (
+          <div className="flex items-center gap-1.5 bg-amber-500/15 border border-amber-500/30 rounded-full px-3 py-1">
+            <Award className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-amber-300">
+              {summary.prCount} new PR{summary.prCount > 1 ? "s" : ""} this session!
+            </span>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground max-w-[26ch]">
+            Excellent work. Your session has been saved.
+          </p>
+        )}
       </div>
 
       <div className="w-full grid grid-cols-3 gap-3">
@@ -227,7 +336,14 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     duration: number;
     totalVolume: number;
     exercisesDone: number;
+    prCount: number;
   } | null>(null);
+
+  // PR tracking
+  const [prSetKeys, setPrSetKeys] = useState<Set<string>>(new Set());
+  const [newPRFlashKeys, setNewPRFlashKeys] = useState<Set<string>>(new Set());
+  const [prExerciseIds, setPrExerciseIds] = useState<Set<string>>(new Set());
+  const [prToastExercise, setPrToastExercise] = useState<string | null>(null);
 
   // Swipe
   const touchStartX = useRef<number | null>(null);
@@ -241,6 +357,12 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     () => new Map((allExercises ?? []).map((e) => [e.id, e])),
     [allExercises]
   );
+
+  // Day-of-week for the session date (used for accept/dismiss suggestion)
+  const sessionDow = useMemo(() => {
+    if (!session) return 0;
+    return new Date(session.date + "T12:00:00").getDay();
+  }, [session]);
 
   const plannedDay = useMemo(() => {
     if (!activePlan || !session) return null;
@@ -262,6 +384,21 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
       }))
       .sort((a, b) => (a.planned?.order ?? 0) - (b.planned?.order ?? 0));
   }, [loggedExercises, plannedDay, exerciseMap]);
+
+  // Exercise IDs in this session — declared after orderedPairs
+  const exerciseIdsInSession = useMemo(
+    () => orderedPairs.map((p) => p.logged.exerciseId),
+    [orderedPairs]
+  );
+
+  // Existing PR logs for exercises in this session
+  const prLogs = useLiveQuery<import("@/lib/db").PRLog[]>(
+    () =>
+      exerciseIdsInSession.length > 0
+        ? db.prLogs.where("exerciseId").anyOf(exerciseIdsInSession).toArray()
+        : Promise.resolve([] as import("@/lib/db").PRLog[]),
+    [exerciseIdsInSession]
+  );
 
   // ── Initialise set drafts when exercise data first loads ────────────────────
   useEffect(() => {
@@ -323,17 +460,60 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
     });
   }
 
-  function toggleSet(leId: string, setIdx: number, restSeconds: number) {
+  async function toggleSet(
+    leId: string,
+    setIdx: number,
+    restSeconds: number,
+    exerciseId: string
+  ) {
+    const sets = setsMap[leId] ?? [];
+    const wasAlreadyDone = sets[setIdx]?.done ?? false;
+
     setSetsMap((prev) => {
-      const sets = [...(prev[leId] ?? [])];
-      const wasDone = sets[setIdx].done;
-      sets[setIdx] = { ...sets[setIdx], done: !wasDone };
-      if (!wasDone) {
-        // Start rest timer after marking done
-        restTimer.start(restSeconds);
-      }
-      return { ...prev, [leId]: sets };
+      const s = [...(prev[leId] ?? [])];
+      s[setIdx] = { ...s[setIdx], done: !s[setIdx].done };
+      return { ...prev, [leId]: s };
     });
+
+    if (!wasAlreadyDone) {
+      // Set is being marked done
+      restTimer.start(restSeconds);
+
+      const set = sets[setIdx];
+      const weight = parseFloat(set.weight) || 0;
+      const reps = parseInt(set.reps) || 0;
+
+      if (prLogs !== undefined && weight > 0 && reps > 0) {
+        const prCheck = checkPRsInMemory(exerciseId, weight, reps, prLogs);
+        const isAnyPR =
+          prCheck.isMaxWeight || prCheck.is1RM || prCheck.isRepsAtWeight;
+
+        if (isAnyPR) {
+          const key = `${leId}-${setIdx}`;
+          setPrSetKeys((prev) => new Set(Array.from(prev).concat(key)));
+          setNewPRFlashKeys((prev) => new Set(Array.from(prev).concat(key)));
+          setPrExerciseIds((prev) => new Set(Array.from(prev).concat(exerciseId)));
+
+          // Get exercise name for toast
+          const exName =
+            exerciseMap.get(exerciseId)?.name ?? "exercise";
+          setPrToastExercise(exName);
+
+          // Auto-clear flash and toast
+          setTimeout(() => {
+            setNewPRFlashKeys((prev) => {
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            });
+          }, 2500);
+          setTimeout(() => setPrToastExercise(null), 3000);
+
+          // Persist to DB
+          await recordPRs(exerciseId, weight, reps, prCheck);
+        }
+      }
+    }
   }
 
   function addSet(leId: string, planned: PlannedExercise | null) {
@@ -360,6 +540,31 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
       sets.splice(setIdx, 1);
       return { ...prev, [leId]: sets };
     });
+  }
+
+  // ── Accept / dismiss progression suggestion ─────────────────────────────────
+  async function handleAcceptSuggestion(exerciseId: string) {
+    if (!activePlan) return;
+    const result = await acceptSuggestion(exerciseId, activePlan.id, sessionDow);
+    // Pre-fill draft weights with new value for not-yet-done sets
+    if (result.newWeight !== null) {
+      const leId = orderedPairs.find(
+        (p) => p.logged.exerciseId === exerciseId
+      )?.logged.id;
+      if (leId) {
+        setSetsMap((prev) => ({
+          ...prev,
+          [leId]: (prev[leId] ?? []).map((s) =>
+            s.done ? s : { ...s, weight: String(result.newWeight) }
+          ),
+        }));
+      }
+    }
+  }
+
+  async function handleDismissSuggestion(exerciseId: string) {
+    if (!activePlan) return;
+    await dismissSuggestion(exerciseId, activePlan.id, sessionDow);
   }
 
   // ── Finish workout ──────────────────────────────────────────────────────────
@@ -414,8 +619,15 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
       }
     );
 
+    // Analyze progression and deload suggestions
+    try {
+      await analyzeProgressionAfterSession(session.id);
+    } catch (e) {
+      console.error("Progression analysis failed", e);
+    }
+
     const exercisesDone = updates.filter((u) => u.completed).length;
-    setSummary({ duration, totalVolume, exercisesDone });
+    setSummary({ duration, totalVolume, exercisesDone, prCount: prExerciseIds.size });
     setFinished(true);
   }
 
@@ -485,6 +697,16 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
         >
+          {/* PR toast */}
+          {prToastExercise && (
+            <div className="mx-4 mt-2 px-3 py-2 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center gap-2">
+              <Award className="h-4 w-4 text-amber-400 shrink-0" />
+              <span className="text-xs font-semibold text-amber-300">
+                🏆 New PR — {prToastExercise}!
+              </span>
+            </div>
+          )}
+
           {/* Exercise header */}
           <div className="px-4 pt-4 pb-3 shrink-0">
             {/* Dot indicators */}
@@ -526,33 +748,48 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
               </span>
             </div>
 
-            {/* Target badges */}
+            {/* Target badges + suggestion */}
             {current.planned && (
-              <div className="flex flex-wrap items-center gap-2 mt-2.5">
-                <span className="text-xs bg-primary/10 text-primary rounded-full px-2.5 py-0.5 font-medium">
-                  {current.planned.targetSets} sets
-                </span>
-                <span className="text-xs bg-muted text-muted-foreground rounded-full px-2.5 py-0.5">
-                  {current.planned.isTimed
-                    ? `${current.planned.targetRepMin}s`
-                    : `${current.planned.targetRepMin}–${current.planned.targetRepMax} reps`}
-                </span>
-                {current.planned.targetWeight !== null && (
-                  <span className="text-xs bg-muted text-muted-foreground rounded-full px-2.5 py-0.5">
-                    {current.planned.targetWeight} kg
+              <>
+                <div className="flex flex-wrap items-center gap-2 mt-2.5">
+                  <span className="text-xs bg-primary/10 text-primary rounded-full px-2.5 py-0.5 font-medium">
+                    {current.planned.targetSets} sets
                   </span>
-                )}
-                <span
-                  className={cn(
-                    "text-xs rounded-full px-2.5 py-0.5 font-medium ml-auto",
-                    doneSetsCount >= (current.planned?.targetSets ?? 0)
-                      ? "bg-green-500/10 text-green-400"
-                      : "bg-muted text-muted-foreground"
+                  <span className="text-xs bg-muted text-muted-foreground rounded-full px-2.5 py-0.5">
+                    {current.planned.isTimed
+                      ? `${current.planned.targetRepMin}s`
+                      : `${current.planned.targetRepMin}–${current.planned.targetRepMax} reps`}
+                  </span>
+                  {current.planned.targetWeight !== null && (
+                    <span className="text-xs bg-muted text-muted-foreground rounded-full px-2.5 py-0.5">
+                      {current.planned.targetWeight} kg
+                    </span>
                   )}
-                >
-                  {doneSetsCount}/{current.planned.targetSets} done
-                </span>
-              </div>
+                  <span
+                    className={cn(
+                      "text-xs rounded-full px-2.5 py-0.5 font-medium ml-auto",
+                      doneSetsCount >= (current.planned?.targetSets ?? 0)
+                        ? "bg-green-500/10 text-green-400"
+                        : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {doneSetsCount}/{current.planned.targetSets} done
+                  </span>
+                </div>
+
+                {/* Progression / deload suggestion */}
+                {current.planned.suggestionType && (
+                  <ProgressionSuggestionBar
+                    planned={current.planned}
+                    onAccept={() =>
+                      handleAcceptSuggestion(current.logged.exerciseId)
+                    }
+                    onDismiss={() =>
+                      handleDismissSuggestion(current.logged.exerciseId)
+                    }
+                  />
+                )}
+              </>
             )}
           </div>
 
@@ -580,10 +817,17 @@ export function WorkoutSessionView({ sessionId }: { sessionId: string }) {
                   onRepsChange={(v) =>
                     updateSet(current.logged.id, i, "reps", v)
                   }
-                  onToggle={() =>
-                    toggleSet(current.logged.id, i, restSeconds)
-                  }
+                  onToggle={() => {
+                    void toggleSet(
+                      current.logged.id,
+                      i,
+                      restSeconds,
+                      current.logged.exerciseId
+                    );
+                  }}
                   onRemove={() => removeSet(current.logged.id, i)}
+                  isPR={prSetKeys.has(`${current.logged.id}-${i}`)}
+                  isNewPR={newPRFlashKeys.has(`${current.logged.id}-${i}`)}
                 />
               ))}
 

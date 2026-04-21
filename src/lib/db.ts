@@ -39,6 +39,10 @@ export interface PlannedExercise {
   restSeconds: number;
   isTimed: boolean; // true for holds like plank (reps = seconds)
   notes: string; // e.g. "per leg", "drop set on final set"
+  // Progression / deload suggestions (written by analyzeProgressionAfterSession)
+  suggestedNextWeight?: number | null;
+  suggestedNextReps?: number | null;
+  suggestionType?: "progression" | "deload" | null;
 }
 
 export interface WorkoutSession {
@@ -119,6 +123,16 @@ export interface UserProfile {
   activePlanId: string;
 }
 
+export interface PRLog {
+  id: string;
+  exerciseId: string;
+  type: "max_weight" | "1rm" | "reps_at_weight";
+  value: number; // kg for max_weight/1rm, reps for reps_at_weight
+  referenceWeight: number; // weight at which PR was set
+  referenceReps: number; // reps at which PR was set
+  achievedAt: number; // ms timestamp
+}
+
 // ─── Database ─────────────────────────────────────────────────────────────────
 
 class FitTrackDB extends Dexie {
@@ -132,6 +146,7 @@ class FitTrackDB extends Dexie {
   bodyweightEntries!: EntityTable<BodyweightEntry, "id">;
   bodyMeasurements!: EntityTable<BodyMeasurement, "id">;
   userProfile!: EntityTable<UserProfile, "id">;
+  prLogs!: EntityTable<PRLog, "id">;
 
   constructor() {
     super("FitTrackDB");
@@ -147,6 +162,11 @@ class FitTrackDB extends Dexie {
       bodyweightEntries: "id, date",
       bodyMeasurements:  "id, date",
       userProfile:     "id",
+    });
+
+    // Version 2: add PRLog table for personal records
+    this.version(2).stores({
+      prLogs: "id, exerciseId, type, achievedAt",
     });
 
     this.on("populate", async () => {

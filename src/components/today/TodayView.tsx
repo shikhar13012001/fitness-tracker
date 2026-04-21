@@ -281,6 +281,22 @@ function ExerciseRow({
         ) : (
           <p className="text-xs text-muted-foreground">— kg</p>
         )}
+        {/* Progression / deload suggestion badge */}
+        {pe.suggestionType && (
+          <div
+            className={cn(
+              "text-[10px] font-semibold px-1.5 py-0.5 rounded-full mt-1 inline-block",
+              pe.suggestionType === "progression"
+                ? "bg-green-500/15 text-green-400"
+                : "bg-yellow-500/15 text-yellow-400"
+            )}
+          >
+            {pe.suggestionType === "progression" ? "🔼" : "⚠️"}{" "}
+            {pe.suggestedNextReps !== null && pe.suggestedNextReps !== undefined
+              ? `${pe.suggestedNextReps} reps`
+              : `${pe.suggestedNextWeight} kg`}
+          </div>
+        )}
       </div>
     </div>
   );
