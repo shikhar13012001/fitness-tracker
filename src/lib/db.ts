@@ -110,7 +110,8 @@ export interface BodyMeasurement {
   waist: number | null;
   leftArm: number | null;
   rightArm: number | null;
-  thigh: number | null;
+  leftThigh: number | null;
+  rightThigh: number | null;
 }
 
 export interface UserProfile {

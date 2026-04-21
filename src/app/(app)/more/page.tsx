@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Scale, ChevronRight, Settings, BookOpen } from "lucide-react";
+import { Scale, ChevronRight, Settings, BookOpen, Ruler } from "lucide-react";
 
 interface MenuRow {
   href: string;
@@ -23,6 +23,14 @@ const sections: { title: string; rows: MenuRow[] }[] = [
         sub: "Log weight · lean bulk tracker",
         iconBg: "bg-blue-500/10",
         iconColor: "text-blue-400",
+      },
+      {
+        href: "/more/measurements",
+        icon: Ruler,
+        label: "Measurements",
+        sub: "Chest, waist, arms, thighs",
+        iconBg: "bg-purple-500/10",
+        iconColor: "text-purple-400",
       },
     ],
   },

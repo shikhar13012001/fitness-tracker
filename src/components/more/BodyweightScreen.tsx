@@ -4,6 +4,16 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ChevronLeft, Scale, TrendingUp, Plus, Trash2 } from "lucide-react";
+import {
+  ComposedChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from "recharts";
 import { db } from "@/lib/db";
 import { todayString } from "@/lib/dateUtils";
 import { cn } from "@/lib/utils";
@@ -11,6 +21,7 @@ import { cn } from "@/lib/utils";
 const STARTING_WEIGHT = 65;
 const TARGET_WEEKLY_MIN = 0.25;
 const TARGET_WEEKLY_MAX = 0.5;
+const TARGET_WEEKLY_IDEAL = 0.4; // midpoint for trajectory line
 
 function parseLocalDate(s: string): Date {
   return new Date(s + "T12:00:00");
@@ -27,6 +38,108 @@ function formatEntryDate(s: string): string {
 function weeksSince(from: string, to: string): number {
   const ms = parseLocalDate(to).getTime() - parseLocalDate(from).getTime();
   return ms / (7 * 24 * 3600 * 1000);
+}
+
+// ─── Trend chart ─────────────────────────────────────────────────────────────
+
+interface ChartPoint {
+  label: string;
+  actual: number | null;
+  target: number;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function CustomTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-xl bg-card border border-border px-3 py-2 text-xs shadow-lg">
+      <p className="font-semibold text-foreground mb-1">{label}</p>
+      {payload.map((p: { name: string; value: number | null; color: string }) =>
+        p.value != null ? (
+          <p key={p.name} style={{ color: p.color }}>
+            {p.name}: {p.value.toFixed(1)} kg
+          </p>
+        ) : null
+      )}
+    </div>
+  );
+}
+
+function BodyweightTrendChart({
+  entries,
+  startDate,
+}: {
+  entries: { date: string; weight: number }[];
+  startDate: string;
+}) {
+  const data = useMemo((): ChartPoint[] => {
+    if (entries.length === 0) return [];
+    const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date));
+    return sorted.map((e) => {
+      const weeks = weeksSince(startDate, e.date);
+      const target = STARTING_WEIGHT + weeks * TARGET_WEEKLY_IDEAL;
+      return {
+        label: parseLocalDate(e.date).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        }),
+        actual: e.weight,
+        target: Math.round(target * 10) / 10,
+      };
+    });
+  }, [entries, startDate]);
+
+  if (data.length < 2) return null;
+
+  const allVals = data.flatMap((d) => [d.actual ?? 0, d.target]);
+  const minVal = Math.floor(Math.min(...allVals) - 0.5);
+  const maxVal = Math.ceil(Math.max(...allVals) + 0.5);
+
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <ComposedChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 3.7% 15.9%)" vertical={false} />
+        <XAxis
+          dataKey="label"
+          tick={{ fill: "hsl(240 5% 64.9%)", fontSize: 10 }}
+          tickLine={false}
+          axisLine={false}
+          interval="preserveStartEnd"
+        />
+        <YAxis
+          domain={[minVal, maxVal]}
+          tick={{ fill: "hsl(240 5% 64.9%)", fontSize: 10 }}
+          tickLine={false}
+          axisLine={false}
+          unit=" kg"
+          width={52}
+        />
+        <Tooltip content={<CustomTooltip />} cursor={{ stroke: "hsl(240 5% 64.9%)", strokeWidth: 1 }} />
+        <Legend
+          wrapperStyle={{ fontSize: 11, color: "hsl(240 5% 64.9%)", paddingTop: 8 }}
+        />
+        <Line
+          type="monotone"
+          dataKey="actual"
+          name="Actual"
+          stroke="hsl(0 0% 98%)"
+          strokeWidth={2}
+          dot={{ r: 3, fill: "hsl(0 0% 98%)", strokeWidth: 0 }}
+          activeDot={{ r: 5 }}
+          connectNulls
+        />
+        <Line
+          type="monotone"
+          dataKey="target"
+          name="Target"
+          stroke="hsl(142 71% 45%)"
+          strokeWidth={1.5}
+          strokeDasharray="5 3"
+          dot={false}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
 }
 
 export function BodyweightScreen() {
@@ -162,6 +275,24 @@ export function BodyweightScreen() {
                 )}>
                   {stats.onTrack ? "On track ✓" : `Target: +${TARGET_WEEKLY_MIN}–${TARGET_WEEKLY_MAX}`}
                 </p>
+              </div>
+            </div>
+          )}
+
+          {/* Trend chart */}
+          {allEntries && allEntries.length >= 2 && (
+            <div className="rounded-2xl bg-card border border-border overflow-hidden">
+              <div className="px-4 py-3 border-b border-border">
+                <p className="text-sm font-semibold text-foreground">Weight Trend</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Actual vs +{TARGET_WEEKLY_IDEAL} kg/week target
+                </p>
+              </div>
+              <div className="p-4">
+                <BodyweightTrendChart
+                  entries={allEntries}
+                  startDate={allEntries[0]?.date ?? todayString()}
+                />
               </div>
             </div>
           )}

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { db } from "@/lib/db";
 import type { ActionItem, Exercise, PlannedExercise } from "@/lib/db";
+import { WeeklyCheckinCard } from "./WeeklyCheckinCard";
 import { todayString, formatDayHeader } from "@/lib/dateUtils";
 import { cn } from "@/lib/utils";
 
@@ -431,6 +432,9 @@ export function TodayView() {
           </p>
         )}
       </div>
+
+      {/* Weekly weight check-in (Sundays or 7+ day gap) */}
+      <WeeklyCheckinCard />
 
       {/* Protein counter */}
       <ProteinCard total={totalProteinToday} target={proteinTarget} />
