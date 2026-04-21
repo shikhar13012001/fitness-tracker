@@ -114,6 +114,23 @@ export interface BodyMeasurement {
   rightThigh: number | null;
 }
 
+export interface NotificationPrefs {
+  enabled: boolean;           // master switch
+  workoutReminders: boolean;  // per-DOW time reminders
+  // Per JS getDay() key ("0"=Sun … "6"=Sat) → "HH:MM" 24h local
+  workoutTimes: Partial<Record<string, string>>;
+  proteinNudge: boolean;      // 8 PM nudge when protein < 80% target
+  supplementReminder: boolean;// 9 PM creatine nudge
+}
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
+  enabled: false,
+  workoutReminders: true,
+  workoutTimes: {},
+  proteinNudge: true,
+  supplementReminder: true,
+};
+
 export interface UserProfile {
   id: number; // always 1 — single-user app
   heightCm: number;
@@ -122,6 +139,7 @@ export interface UserProfile {
   units: "kg" | "lbs";
   proteinTargetG: number;
   activePlanId: string;
+  notificationPrefs?: NotificationPrefs;
 }
 
 export interface PRLog {
